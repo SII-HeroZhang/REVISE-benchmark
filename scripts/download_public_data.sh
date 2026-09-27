@@ -9,12 +9,20 @@ case "$MODE" in spot|misseg|all) ;; *) echo "Usage: $0 [spot|misseg|all]" >&2; e
 
 download() {
   local url=$1 dest=$2
+  local remote_size local_size
   mkdir -p "$(dirname "$dest")"
-  if [[ -s "$dest" ]]; then
+  remote_size=$(curl -fsSLI --retry 5 "$url" | awk 'tolower($1)=="content-length:" {gsub("\r", "", $2); size=$2} END {print size}')
+  [[ "$remote_size" =~ ^[0-9]+$ ]] || { echo "Cannot determine source size: $url" >&2; return 1; }
+  local_size=0
+  [[ ! -e "$dest" ]] || local_size=$(wc -c < "$dest" | tr -d '[:space:]')
+  if [[ "$local_size" == "$remote_size" ]]; then
     echo "Using existing file: $dest"
     return
   fi
+  (( local_size < remote_size )) || { echo "Local file exceeds source size: $dest" >&2; return 1; }
   curl -fL -C - --retry 10 --retry-delay 15 -o "$dest" "$url"
+  local_size=$(wc -c < "$dest" | tr -d '[:space:]')
+  [[ "$local_size" == "$remote_size" ]] || { echo "Incomplete download: $dest ($local_size/$remote_size bytes)" >&2; return 1; }
 }
 
 if [[ "$MODE" == spot || "$MODE" == all ]]; then
@@ -31,8 +39,10 @@ if [[ "$MODE" == misseg || "$MODE" == all ]]; then
   for suffix in binned_outputs.tar.gz spatial.tar.gz tissue_image.btf; do
     download "$base/${sample}_${suffix}" "$target/${sample}_${suffix}"
   done
-  [[ -d "$target/binned_outputs" ]] || tar -xzf "$target/${sample}_binned_outputs.tar.gz" -C "$target"
-  [[ -d "$target/spatial" ]] || tar -xzf "$target/${sample}_spatial.tar.gz" -C "$target"
+  [[ -s "$target/binned_outputs/square_002um/filtered_feature_bc_matrix.h5" ]] || \
+    tar -xzf "$target/${sample}_binned_outputs.tar.gz" -C "$target"
+  [[ -s "$target/spatial/tissue_hires_image.png" ]] || \
+    tar -xzf "$target/${sample}_spatial.tar.gz" -C "$target"
 fi
 
 echo "Public data ready under $DATA_ROOT"
